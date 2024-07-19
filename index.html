@@ -1,0 +1,466 @@
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>SMART PLUG</title>
+</head>
+
+<body>
+
+  <style>
+    body {
+      background-color: #ffffff;
+      box-sizing: border-box;
+      font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+    }
+
+    table {
+      width: 100%;
+      table-layout: fixed;
+    }
+
+    .labels {
+      height: 50px;
+      width: 100px;
+      display: inline-block;
+      float: left;
+    }
+
+    .inputs {
+      width: 100px;
+      display: inline-block;
+      float: right;
+    }
+
+    .value_cell {
+      max-width: 100px;
+      min-width: 50px;
+      width: 100px;
+    }
+
+    .values {
+      display: inline-block;
+      vertical-align: middle;
+      font-size: 30px;
+    }
+
+    #meas {
+      overflow: hidden;
+    }
+
+    .codes {
+      font-size: 10px;
+    }
+
+    .coeffs {
+      background-color: #f0f0f0;
+      border-radius: 0.75em;
+      display: block;
+      margin: 10px;
+      padding: 10px;
+      text-align: left;
+      height: 90%;
+      width: 90%;
+      font-size: 14px;
+    }
+
+    .value_div {
+      background-color: #e0e0e0;
+      border-radius: 0.75em;
+      width: 90%;
+      height: 90%;
+      display: block;
+      border: 5em;
+      margin: 10px;
+      padding: 10px;
+      text-align: center;
+    }
+
+    .output {
+      background-color: #f0f0f0;
+      border-radius: 0.75em;
+      display: block;
+      margin: 0.5em;
+      padding: 0.5em;
+    }
+
+    #status {
+      margin: .5em 0;
+      font-style: italic;
+    }
+
+    #log {
+      margin: .5em 0;
+      white-space: pre-wrap;
+    }
+
+    #status:empty,
+    #log:empty,
+    #content:empty {
+      display: none;
+    }
+  </style>
+
+  <p>
+  <h3>[Smart Plug] Production Test - Device Checking</h3>
+  </p>
+
+  <table>
+    <tr style="height:60px;">
+      <td style="min-width:50px; width:50px;">
+        <form>
+          <button id="startNotifications">Start</button>
+          <button id="stopNotifications">Stop</button>
+        </form>
+        <button id="clear_graph">clear graph</button>
+      </td>
+      <td style="min-width:100px; max-height:50px; min-height:50px; width:100px; height:50px;">
+        <div id="meas" class="meas">
+          <div class="labels">
+            <div id='labels_div1'></div>
+            <div id='labels_div2'></div>
+            <div id='labels_div3'></div>
+          </div>
+          <div class="inputs">
+            <input type="text" size="6" id="v_real">
+            <input type="text" size="6" id="i_real">
+            <input type="text" size="6" id="p_real">
+          </div>
+        </div>
+      </td>
+      <td class="value_cell">
+        <div class="value_div">
+          <span id="v_value" class="values"></span>
+          <div id="v_code" class="codes"></div>
+        </div>
+        <div>
+          <span id="v_coeff" class="coeffs" onclick="onClickCoeff(0)"></span>
+        </div>
+      </td>
+      <td class="value_cell">
+        <div class="value_div">
+          <span id="i_value" class="values"></span>
+          <div id="i_code" class="codes"></div>
+        </div>
+        <div><span id="i_coeff" class="coeffs" onclick="onClickCoeff(1)"></span>
+      </td>
+      <td class="value_cell">
+        <div class="value_div">
+          <span id="p_value" class="values"></span>
+          <div id="p_code" class="codes"></div>
+        </div>
+        <div><span id="p_coeff" class="coeffs" onclick="onClickCoeff(2)"></span>
+      </td>
+    </tr>
+  </table>
+
+  <div id="graph_div1" style="height:160px;"></div>
+  <div id="graph_div2" style="height:160px;"></div>
+  <div id="graph_div3" style="height:160px;"></div>
+
+  <div id="output" class="output">
+    <div id="content"></div>
+    <div id="status"></div>
+    <pre id="log"></pre>
+  </div>
+
+  <script src="https://dygraphs.com/dist/dygraph.js">
+  </script>
+
+  <script>
+
+    var $ = function (id) {
+      return document.getElementById(id);
+    }
+
+    let coeffs_default = [15883, 251213, 623];
+    let coeffs = [15883, 251213, 623];
+    let codes = [0, 0, 0];
+
+    let sampling_period_s = 0.5;
+
+    var myCharacteristic;
+
+    var gs;
+    var graph_rendered = false;
+    var allocated = false;
+    var graph_needs_update = false;
+    var g_data = [];
+    var cur_idx = 0;
+    var coeffs_use_default = [true, true, true];
+
+    async function onStartButtonClick() {
+
+      let serviceUuid = '2064c3e2-a7b1-11ed-ada1-0242ac120002'
+
+      let characteristicUuid = '2064c34e-a7b1-11ed-ada1-0242ac120002'
+
+      try {
+        log('Requesting Bluetooth Device...');
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: "SMART_PLUG" }],
+          optionalServices: ['device_information', serviceUuid]
+        });
+
+        log('> Name:             ' + device.name);
+
+        log('Connecting to GATT Server...');
+        const server = await device.gatt.connect();
+
+        log('Getting Device Information Service...');
+        const di_svc = await server.getPrimaryService('device_information');
+
+        log('Getting Device Information Characteristics...');
+        const characteristics = await di_svc.getCharacteristics();
+
+        const decoder = new TextDecoder('utf-8');
+        for (const characteristic of characteristics) {
+          switch (characteristic.uuid) {
+
+            case BluetoothUUID.getCharacteristic('manufacturer_name_string'):
+              await characteristic.readValue().then(value => {
+                log('> Manufacturer Name String: ' + decoder.decode(value));
+              });
+              break;
+            case BluetoothUUID.getCharacteristic('model_number_string'):
+              await characteristic.readValue().then(value => {
+                log('> Model Number String: ' + decoder.decode(value));
+              });
+              break;
+            case BluetoothUUID.getCharacteristic('firmware_revision_string'):
+              await characteristic.readValue().then(value => {
+                log('> Firmware Revision String: ' + decoder.decode(value));
+              });
+              break;
+            case BluetoothUUID.getCharacteristic('hardware_revision_string'):
+              await characteristic.readValue().then(value => {
+                log('> Hardware Revision String: ' + decoder.decode(value));
+              });
+              break;
+            case BluetoothUUID.getCharacteristic('software_revision_string'):
+              await characteristic.readValue().then(value => {
+                log('> Software Revision String: ' + decoder.decode(value));
+              });
+              break;
+            default: log('> Unknown Characteristic: ' + characteristic.uuid);
+          }
+        }
+
+        log('Getting Data Service...');
+        const service = await server.getPrimaryService(serviceUuid);
+
+        log('Getting Characteristic...');
+        myCharacteristic = await service.getCharacteristic(characteristicUuid);
+
+        await myCharacteristic.startNotifications();
+
+        log('> Notifications started');
+        myCharacteristic.addEventListener('characteristicvaluechanged',
+          handleNotifications);
+      } catch (error) {
+        log('Argh! ' + error);
+      }
+    }
+
+    async function onStopButtonClick() {
+      if (myCharacteristic) {
+        try {
+          await myCharacteristic.stopNotifications();
+          log('> Notifications stopped');
+          myCharacteristic.removeEventListener('characteristicvaluechanged',
+            handleNotifications);
+        } catch (error) {
+          log('Argh! ' + error);
+        }
+      }
+      graph_needs_update = false;
+    }
+
+    function handleNotifications(event) {
+      let value = event.target.value;
+
+	  voltage_rms_mv = value.getUint8(0) + (value.getUint8(1) * 256) + (value.getUint8(2) * 256 * 256);
+	  current_rms_ma = value.getUint8(4) + (value.getUint8(5) * 256) + (value.getUint8(6) * 256 * 256);
+	  power_mw = value.getUint8(8) + (value.getUint8(9) * 256) + (value.getUint8(10) * 256 * 256);
+	  timestamp = value.getUint8(12) + (value.getUint8(13) * 256) + (value.getUint8(14) * 256 * 256) + (value.getUint8(15) *256 * 256 * 256);
+
+//      codes[0] = 0
+//      codes[1] = 0
+//      var code_signed = value.getUint8(9) + (value.getUint8(10) * 256) + (value.getUint8(11) * 256 * 256);
+//      if (code_signed > 0x7FFFFF) {
+//        code_signed = (0xFFFFFF - code_signed + 1) * -1;
+//      }
+//      codes[2] = code_signed;
+
+      v_v = voltage_rms_mv / 1000.0;
+      i_v = current_rms_ma / 1000.0;
+      p_v = power_mw / 1000.0 / 1000.0;
+
+//      $('v_coeff').innerHTML = coeffs[0];
+//      $('i_coeff').innerHTML = coeffs[1];
+//      $('p_coeff').innerHTML = coeffs[2];
+
+      var v_rms = 1.218 * codes[0] / 73989;
+      var i_rms = 1.218 * codes[1] / 305978;
+      
+//      $('v_code').innerHTML = 'CODE: ' + codes[0] + '    RMS: ' + v_rms.toFixed(3) + ' mV';
+//      $('i_code').innerHTML = 'CODE: ' + codes[1] + '    RMS: ' + i_rms.toFixed(3) + ' mV';
+      $('p_code').innerHTML = timestamp
+
+      $('v_value').innerHTML = v_v.toFixed(3) + ' V';
+      $('i_value').innerHTML = i_v.toFixed(3) + ' A';
+      $('p_value').innerHTML = p_v.toFixed(3) + ' W';
+
+      UpdateGraph(v_v, i_v, p_v);
+    }
+
+    document.querySelector('#startNotifications').addEventListener('click', function (event) {
+      event.stopPropagation();
+      event.preventDefault();
+
+      if (isWebBluetoothEnabled()) {
+        StatusBar.clearLog();
+        onStartButtonClick();
+      }
+    });
+    document.querySelector('#stopNotifications').addEventListener('click', function (event) {
+      event.stopPropagation();
+      event.preventDefault();
+
+      if (isWebBluetoothEnabled()) {
+        onStopButtonClick();
+      }
+    });
+
+    var StatusBar = {
+      log: function () {
+        var line = Array.prototype.slice.call(arguments).map(function (argument) {
+          return typeof argument === 'string' ? argument : JSON.stringify(argument);
+        }).join(' ');
+
+        document.querySelector('#log').textContent += line + '\n';
+      },
+
+      clearLog: function () {
+        document.querySelector('#log').textContent = '';
+      },
+
+      setStatus: function (status) {
+        document.querySelector('#status').textContent = status;
+      },
+
+      setContent: function (newContent) {
+        var content = document.querySelector('#content');
+        while (content.hasChildNodes()) {
+          content.removeChild(content.lastChild);
+        }
+        content.appendChild(newContent);
+      }
+    };
+
+    log = StatusBar.log;
+
+    function isWebBluetoothEnabled() {
+      if (navigator.bluetooth) {
+        return true;
+      } else {
+        StatusBar.setStatus('Web Bluetooth API is not available.\n' +
+          'Please make sure the "Experimental Web Platform features" flag is enabled.');
+        return false;
+      }
+    }
+
+    function UpdateGraph(u_value, i_value, p_value) {
+      if (!allocated) {
+        g_data = new Array();
+        g_data.push(new Array());
+        g_data.push(new Array());
+        g_data.push(new Array());
+        allocated = true;
+      }
+      graph_needs_update = true;
+
+      cur_idx = cur_idx + 1;
+      g_data[0].push([cur_idx * sampling_period_s, u_value]);
+      g_data[1].push([cur_idx * sampling_period_s, i_value]);
+      g_data[2].push([cur_idx * sampling_period_s, p_value]);
+
+      if (!graph_rendered) {
+
+        let graph_titles = ['RMS voltage', 'RMS current', 'Active power'];
+        let graph_units = ['V', 'A', 'W'];
+        let graph_colors = ['blue', 'green', 'magenta'];
+
+        gs = new Array();
+
+        for (var i = 0; i < 3; i++) {
+          gs.push(new Dygraph(
+            $('graph_div' + (i + 1)),
+            g_data[i],
+            {
+              title: graph_titles[i],
+              xlabel: 'T(sec)',
+              ylabel: [graph_units[i]],
+              colors: [graph_colors[i]],
+              axes: {
+                x: { valueFormatter: function (x) { return this.getLabels()[0] + ': ' + x.toPrecision(3); } }
+              },
+              labels: ['T', graph_units[i]],
+              labelsDiv: $('labels_div' + (i + 1)),
+              legend: "follow",
+              digitsAfterDecimal: 3,
+            }));
+        }
+
+        setInterval(function () { renderChart() }, 250);
+        graph_rendered = true;
+      }
+    }
+
+    var renderChart = function () {
+      if (graph_needs_update && (g_data[0].length != 0)) {
+        for (var i = 0; i < 3; i++) {
+          gs[i].updateOptions({ 'file': g_data[i] });
+        }
+      }
+    }
+
+    function onClickCoeff(i) {
+      var buttons = ['v_coeff', 'i_coeff', 'p_coeff'];
+      var inputs = ['v_real', 'i_real', 'p_real'];
+      if (coeffs_use_default[i]) {
+        $(buttons[i]).style.background = "rgb(240, 180, 180)";
+        var goal_value = $(inputs[i]).value;
+        coeffs[i] = Math.floor(codes[i] / goal_value);
+        coeffs_use_default[i] = false;
+      } else {
+        $(buttons[i]).style.background = "rgb(180, 240, 180)";
+        coeffs[i] = coeffs_default[i];
+        coeffs_use_default[i] = true;
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', function (event) {
+      $('v_real').value = '220.0';
+      $('i_real').value = '0.392';
+      $('p_real').value = '87.0';
+      $('v_coeff').style.background = "rgb(180, 240, 180)";
+      $('i_coeff').style.background = "rgb(180, 240, 180)";
+      $('p_coeff').style.background = "rgb(180, 240, 180)";
+      $("clear_graph").onclick = function () {
+        graph_needs_update = false;
+        delete g_data;
+        cur_idx = 0;
+        for (var i = 0; i < gs.length; i++) {
+          gs[i].destroy();
+        }
+        delete gs;
+        allocated = false;
+        graph_rendered = false;
+      }
+
+    });
+
+  </script>
+
+</html>
