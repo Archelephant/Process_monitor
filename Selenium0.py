@@ -60,3 +60,5 @@ def main_login(user_id=1):
 # Получаем имя интерфейса Wi-Fi
 for interface in interfaces()
 wifi_interface = next(interface for interface in interfaces() if 'wlan' in interface)
+
+#TO DO: add main function
