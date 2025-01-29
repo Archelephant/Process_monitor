@@ -1,6 +1,7 @@
 # Process_monitor
 
 --------Initial Commit---------------
+
 This Python script was created and tested with Python 3.6
 
 External dependencies: 
@@ -17,6 +18,7 @@ And don't forget to change the "decimal = ","" parameter!
 
 
 ----January, 29, 2025 update------------
+
 Added Power_monitor.py to monitor voltage and power sensor reading and saving them into .csv.
 
 Created and tested with Python 3.11.2
